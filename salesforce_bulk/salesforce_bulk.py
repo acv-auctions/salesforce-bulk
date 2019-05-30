@@ -488,6 +488,8 @@ class SalesforceBulk(object):
         Should not all batches complete successfully, raise an exception.
         """
 
+        time.sleep(4)
+
         batches = [init_batch_id]
         fetched_batches = []
 
@@ -502,7 +504,7 @@ class SalesforceBulk(object):
 
             for bid in batches:
                 # Fetching batch status for bid
-                self.batch_status(batch_id=bid, job_id=job, reload=True)
+                self.batch_status(batch_id=bid, job_id=job_id, reload=True)
 
                 if self.batch_statuses[bid]["state"] in (
                         bulk_states.COMPLETED,
@@ -523,28 +525,28 @@ class SalesforceBulk(object):
                     len(batches) > 1 and
                     len(fetched_batches) >= len(batches) - 1) \
                     or not_procd == 0:
-                self.close_job(job)
+                self.close_job(job_id)
                 keep_watching = False
                 break
 
             for batch_id in self.batch_statuses:
                 if self.batch_statuses[batch_id]["state"] == bulk_states.COMPLETED and\
                         batch_id not in fetched_batches:
-                    for result in self.get_all_results_for_query_batch(batch_id, job_id=job):
-                        result = json.load(IteratorBytesIO(result))
+                    for result in self.get_all_results_for_query_batch(batch_id, job_id=job_id):
+                        result = json.load(util.IteratorBytesIO(result))
                         for row in result:
                             yield row
 
                     fetched_batches.append(batch_id)
 
                 elif self.batch_statuses[batch_id]["state"] in bulk_states.BATCHED_ERROR_STATES:
-                    self.close_job(job)
+                    self.close_job(job_id)
                     raise RuntimeError("Chunked batch detected failed chunks.")
 
                 elif self.batch_statuses[batch_id]["state"] == bulk_states.NOT_PROCESSED:
                     if len(batches) == 1:
                         # Fetching additional batches
-                        for bobj in self.get_batch_list(job):
+                        for bobj in self.get_batch_list(job_id):
                             if bobj["id"] not in batches:
                                 batches.append(bobj["id"])
             time.sleep(1)
