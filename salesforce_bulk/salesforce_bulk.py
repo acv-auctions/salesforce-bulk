@@ -478,6 +478,80 @@ class SalesforceBulk(object):
                 chunk_size=chunk_size
             )
 
+    def get_all_chunked_query_batch_results(self, init_batch_id, job_id=None):
+        """
+        Get the results from a pk_chunked query.
+
+        Taking as input the batch ID of the initial query, follow it through the not-processed state
+        then grab the subsequent batches, and grab all their results and yield them.
+
+        Should not all batches complete successfully, raise an exception.
+        """
+
+        batches = [init_batch_id]
+        fetched_batches = []
+
+        keep_watching = True
+        while keep_watching:
+            # refresh the batch statuses
+            # for any that are complete, fetch their results
+            # any failures or aborts will exit with an error code.
+            errd_jobs = 0
+            not_procd = 0
+            cnt = 0
+
+            for bid in batches:
+                # Fetching batch status for bid
+                self.batch_status(batch_id=bid, job_id=job, reload=True)
+
+                if self.batch_statuses[bid]["state"] in (
+                        bulk_states.COMPLETED,
+                        bulk_states.NOT_PROCESSED,
+                        bulk_states.ABORTED,
+                        bulk_states.FAILED):
+                    cnt += 1
+
+                if self.batch_statuses[bid]["state"] == bulk_states.NOT_PROCESSED:
+                    not_procd += 1
+
+                if self.batch_statuses[bid]["state"] in bulk_states.BATCHED_ERROR_STATES:
+                    errd_jobs += 1
+
+            # If all the jobs we know about are complete, NOT_PROCESSED, or otherwise terminated
+            # declare ourselves complete. Raise exception if warranted
+            if (cnt == len(batches) and
+                    len(batches) > 1 and
+                    len(fetched_batches) >= len(batches) - 1) \
+                    or not_procd == 0:
+                self.close_job(job)
+                keep_watching = False
+                break
+
+            for batch_id in self.batch_statuses:
+                if self.batch_statuses[batch_id]["state"] == bulk_states.COMPLETED and\
+                        batch_id not in fetched_batches:
+                    for result in self.get_all_results_for_query_batch(batch_id, job_id=job):
+                        result = json.load(IteratorBytesIO(result))
+                        for row in result:
+                            yield row
+
+                    fetched_batches.append(batch_id)
+
+                elif self.batch_statuses[batch_id]["state"] in bulk_states.BATCHED_ERROR_STATES:
+                    self.close_job(job)
+                    raise RuntimeError("Chunked batch detected failed chunks.")
+
+                elif self.batch_statuses[batch_id]["state"] == bulk_states.NOT_PROCESSED:
+                    if len(batches) == 1:
+                        # Fetching additional batches
+                        for bobj in self.get_batch_list(job):
+                            if bobj["id"] not in batches:
+                                batches.append(bobj["id"])
+            time.sleep(1)
+        if errd_jobs:
+            raise RuntimeError("Chunked batch completed with errors")
+
+
     def get_query_batch_results(self, batch_id, result_id, job_id=None, chunk_size=2048, raw=False):
         job_id = job_id or self.lookup_job_id(batch_id)
 
