@@ -513,14 +513,16 @@ class SalesforceBulk(object):
                         bulk_states.FAILED):
                     cnt += 1
 
-                if self.batch_statuses[bid]["state"] == bulk_states.NOT_PROCESSED:
+                if self.batch_statuses[bid]["state"] not in (bulk_states.COMPLETED,
+                                                             bulk_states.ABORTED,
+                                                             bulk_states.FAILED):
                     not_procd += 1
 
                 if self.batch_statuses[bid]["state"] in bulk_states.BATCHED_ERROR_STATES:
                     errd_jobs += 1
 
             # If all the jobs we know about are complete, NOT_PROCESSED, or otherwise terminated
-            # declare ourselves complete. Raise exception if warranted
+            # declare ourselves complete. An exception will be raised outside the loop if needed.
             if (cnt == len(batches) and
                     len(batches) > 1 and
                     len(fetched_batches) >= len(batches) - 1) \
@@ -551,6 +553,7 @@ class SalesforceBulk(object):
                                 batches.append(bobj["id"])
             time.sleep(1)
         if errd_jobs:
+            self.close_job(job_id)
             raise RuntimeError("Chunked batch completed with errors")
 
 
