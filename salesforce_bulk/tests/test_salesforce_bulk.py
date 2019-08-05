@@ -202,6 +202,112 @@ class SalesforceBulkTests(unittest.TestCase):
         assert 'some thing happened' in e.args[0]
         assert orig.args[0] == e.args[0]
 
+    def test_chunked_query_batch_results_for_single_batch_job(self):
+        bulk = SalesforceBulk(sessionId='test', host='null.com')
+        test_job_id = '750q00000060uFQ'
+        init_batch_id = '751q0000005i1Rp'
+        batch_statuses = {
+            '751q0000005i1Rp': {'state': bulk_states.NOT_PROCESSED}
+        }
+        results = [
+            {'id': '500q000000IssacAAB', 'notes__c': 'test1'},
+            {'id': '500q000000IssacAAB', 'notes__c': 'test2'}
+        ]
+        chunked_results = []
+
+        def batch_status_side_effect(batch_id, job_id, reload):
+            batch_statuses[batch_id] = {'state': bulk_states.COMPLETED}
+            bulk.batch_statuses = batch_statuses
+
+        def get_batch_list_side_effect(job_id):
+            return [{'id': init_batch_id}]
+
+        def get_all_results_for_query_batch_side_effect(batch_id, job_id):
+            yield io.BytesIO(json.dumps(results).encode())
+
+        with mock.patch('salesforce_bulk.SalesforceBulk.batch_status',
+                        side_effect=batch_status_side_effect):
+            with mock.patch('salesforce_bulk.SalesforceBulk.get_batch_list',
+                            side_effect=get_batch_list_side_effect):
+                with mock.patch('salesforce_bulk.SalesforceBulk.get_all_results_for_query_batch',
+                                side_effect=get_all_results_for_query_batch_side_effect):
+                    with mock.patch('salesforce_bulk.SalesforceBulk.close_job') as mock_close:
+                        chunked_results = list(bulk.get_all_chunked_query_batch_results(init_batch_id, test_job_id))
+                        assert mock_close.call_count == 1
+                        assert mock_close.call_args[0][0] == test_job_id
+        assert results == chunked_results
+
+    def test_chunked_query_batch_results_for_multiple_batch_job(self):
+        bulk = SalesforceBulk(sessionId='test', host='null.com')
+        test_job_id = '750q00000060uFQ'
+        init_batch_id = '751q0000005i1Rp'
+        batch_statuses = {
+            '751q0000005i1Rp': {'state': bulk_states.NOT_PROCESSED}
+        }
+        results = {
+            '751q0000005i1Rq': [
+                {'id': '500q000000IssacAAB', 'notes__c': 'test1'},
+                {'id': '500q000000IssacAAB', 'notes__c': 'test2'}
+            ],
+            '751q0000005i1Rr': [
+                {'id': '500q000000IssacABB', 'notes__c': 'test3'},
+                {'id': '500q000000IssacABB', 'notes__c': 'test4'}
+            ]
+        }
+        chunked_results = []
+
+        def batch_status_side_effect(batch_id, job_id, reload):
+            if not batch_id == init_batch_id:
+                batch_statuses[batch_id] = {'state': bulk_states.COMPLETED}
+            bulk.batch_statuses = batch_statuses
+
+        def get_batch_list_side_effect(job_id):
+            return [{'id': '751q0000005i1Rq'}, {'id': '751q0000005i1Rr'}]
+
+        def get_all_results_for_query_batch_side_effect(batch_id, job_id):
+            yield io.BytesIO(json.dumps(results[batch_id]).encode())
+
+        with mock.patch('salesforce_bulk.SalesforceBulk.batch_status',
+                        side_effect=batch_status_side_effect):
+            with mock.patch('salesforce_bulk.SalesforceBulk.get_batch_list',
+                            side_effect=get_batch_list_side_effect):
+                with mock.patch('salesforce_bulk.SalesforceBulk.get_all_results_for_query_batch',
+                                side_effect=get_all_results_for_query_batch_side_effect):
+                    with mock.patch('salesforce_bulk.SalesforceBulk.close_job') as mock_close:
+                        chunked_results = list(bulk.get_all_chunked_query_batch_results(init_batch_id, test_job_id))
+                        assert mock_close.call_count == 1
+                        assert mock_close.call_args[0][0] == test_job_id
+        assert results['751q0000005i1Rq'] + results['751q0000005i1Rr'] == chunked_results
+
+    def test_chunked_query_batch_results_for_failed_batch_job(self):
+        bulk = SalesforceBulk(sessionId='test', host='null.com')
+        test_job_id = '750q00000060uFQ'
+        init_batch_id = '751q0000005i1Rp'
+        batch_statuses = {
+            '751q0000005i1Rp': {'state': bulk_states.FAILED}
+        }
+        exception_encountered = None
+
+        def batch_status_side_effect(batch_id, job_id, reload):
+            bulk.batch_statuses = batch_statuses
+
+        def get_batch_list_side_effect(job_id):
+            return [{'id': init_batch_id}]
+
+        with mock.patch('salesforce_bulk.SalesforceBulk.batch_status',
+                        side_effect=batch_status_side_effect):
+            with mock.patch('salesforce_bulk.SalesforceBulk.get_batch_list',
+                            side_effect=get_batch_list_side_effect):
+                with mock.patch('salesforce_bulk.SalesforceBulk.close_job') as mock_close:
+                    try:
+                        chunked_results = list(bulk.get_all_chunked_query_batch_results(init_batch_id, test_job_id))
+                    except RuntimeError as rte:
+                        exception_encountered = rte
+                    assert mock_close.call_count == 1
+                    assert mock_close.call_args[0][0] == test_job_id
+        assert exception_encountered is not None
+        assert str(exception_encountered) == "Chunked batch detected failed chunks."
+
 
 class SalesforceBulkIntegrationTestCSV(unittest.TestCase):
 
