@@ -478,7 +478,7 @@ class SalesforceBulk(object):
                 chunk_size=chunk_size
             )
 
-    def get_all_chunked_query_batch_results(self, init_batch_id, job_id=None):
+    def get_all_chunked_query_batch_results(self, init_batch_id, job_id=None, parent_batch_wait=10):
         """
         Get the results from a pk_chunked query.
 
@@ -488,7 +488,7 @@ class SalesforceBulk(object):
         Should not all batches complete successfully, raise an exception.
         """
 
-        time.sleep(4)
+        time.sleep(parent_batch_wait)
         fetched_batches = []
 
         self.batch_status(batch_id=init_batch_id, job_id=job_id, reload=True)
